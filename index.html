@@ -1,0 +1,17 @@
+
+<!doctype html>
+<html>
+  <body>
+    <h1>Buy a Lead Pack</h1>
+    <form action="/create-checkout-session" method="post">
+      <label>Niche</label>
+      <input name="niche" placeholder="roofing contractor" />
+      <label>City</label>
+      <input name="city" placeholder="Dallas" />
+      <input name="price_id" value="{{ price_id }}" type="hidden" />
+      <button type="submit">Proceed to Stripe</button>
+    </form>
+    <p>Webhook URL: /stripe/webhook</p>
+    <p>Verification: <a href="/stripe-verify">/stripe-verify</a></p>
+  </body>
+</html>
