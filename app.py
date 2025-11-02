@@ -5,6 +5,9 @@ import stripe
 from flask import Flask, request, redirect, make_response, send_from_directory
 from flask_cors import CORS
 from dotenv import load_dotenv
+@app.get("/")
+def index():
+    return render_template("index.html")
 
 # Load .env if present (local dev)
 load_dotenv()
