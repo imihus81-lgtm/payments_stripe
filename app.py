@@ -1,108 +1,223 @@
-import os, json, logging
-from flask import Flask, request, render_template, jsonify, redirect, url_for
-from flask_cors import CORS
+# payment/app.py
+import os
+import json
+import logging
+from datetime import datetime
 
-# ---------- App ----------
-app = Flask(__name__)
-CORS(app)
-logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)s | %(message)s")
-log = logging.getLogger("app")
+from flask import Flask, request, jsonify, abort
 
-# ---------- Config ----------
-STRIPE_SECRET_KEY   = os.getenv("STRIPE_SECRET_KEY", "")
-STRIPE_PRICE_ID     = os.getenv("STRIPE_PRICE_ID", "")
+# --- Stripe ---
+import stripe
+
+# --- PayPal ---
+import base64
+import requests
+
+# =========================
+# ENV & CONFIG
+# =========================
+STRIPE_SECRET_KEY = os.getenv("STRIPE_SECRET_KEY", "")
 STRIPE_WEBHOOK_SECRET = os.getenv("STRIPE_WEBHOOK_SECRET", "")
-PUBLIC_BASE_URL     = os.getenv("PUBLIC_BASE_URL", "http://127.0.0.1:8000")
 
-# Import Stripe only if key present (avoids import crash on Render while building)
-try:
-    import stripe  # type: ignore
-    if STRIPE_SECRET_KEY:
-        stripe.api_key = STRIPE_SECRET_KEY
-except Exception as e:
-    log.warning("Stripe SDK not initialized yet: %s", e)
+# PayPal: set PAYPAL_MODE to "sandbox" or "live"
+PAYPAL_MODE = os.getenv("PAYPAL_MODE", "sandbox").lower()
+PAYPAL_CLIENT_ID = os.getenv("PAYPAL_CLIENT_ID", "")
+PAYPAL_CLIENT_SECRET = os.getenv("PAYPAL_CLIENT_SECRET", "")
+PAYPAL_WEBHOOK_ID = os.getenv("PAYPAL_WEBHOOK_ID", "")
 
-# ---------- Brain hook (optional) ----------
-# Try to import your brain. If not present (Render), fall back to a safe no-op so the app still runs.
-def _noop_record_purchase(email, niche, city):
-    log.info("🧠(noop) record_purchase(email=%s, niche=%s, city=%s)", email, niche, city)
+if STRIPE_SECRET_KEY:
+    stripe.api_key = STRIPE_SECRET_KEY
 
-try:
-    # expected path if you later add the brain into this repo:
-    from ceo_brain.brain.api_hooks import record_purchase as _real_record_purchase  # type: ignore
-    record_purchase = _real_record_purchase
-    log.info("✅ Brain hook loaded.")
-except Exception:
-    record_purchase = _noop_record_purchase
-    log.info("⚠️ Brain not found. Using no-op record_purchase.")
+PAYPAL_API_BASE = "https://api-m.sandbox.paypal.com" if PAYPAL_MODE == "sandbox" else "https://api-m.paypal.com"
 
-# ---------- Routes ----------
-@app.get("/healthz")
-def healthz():
-    return {"ok": True}
+# =========================
+# LOGGING
+# =========================
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(message)s"
+)
+logger = logging.getLogger("payment-app")
+
+# =========================
+# FLASK APP
+# =========================
+app = Flask(__name__)
 
 @app.get("/")
-def index():
-    # Simple form lives in templates/index.html
-    return render_template("index.html")
+def root():
+    return jsonify({
+        "status": "ok",
+        "service": "payment",
+        "time": datetime.utcnow().isoformat() + "Z"
+    }), 200
 
-@app.get("/stripe-verify")
-def stripe_verify():
-    return render_template("verify.html", business="XAI Agent",
-                           support="support@xaiagent.ai",
-                           webhook_path="/stripe/webhook")
+@app.get("/healthz")
+def healthz():
+    return "ok", 200
 
-@app.get("/success")
-def success():
-    return render_template("success.html")
-
-@app.post("/checkout")
-def checkout():
-    if not STRIPE_SECRET_KEY or not STRIPE_PRICE_ID:
-        return jsonify({"error": "Stripe env vars missing"}), 400
-
-    data = request.get_json(force=True)
-    niche = (data.get("niche") or "").strip()
-    city  = (data.get("city") or "").strip()
-
-    # Create a Checkout Session
-    session = stripe.checkout.Session.create(
-        mode="payment",
-        line_items=[{"price": STRIPE_PRICE_ID, "quantity": 1}],
-        success_url=f"{PUBLIC_BASE_URL}/success",
-        cancel_url=f"{PUBLIC_BASE_URL}/",
-        metadata={"niche": niche, "city": city},
-    )
-    return jsonify({"url": session.url})
-
+# =========================
+# STRIPE WEBHOOK
+# =========================
 @app.post("/stripe/webhook")
 def stripe_webhook():
-    payload = request.get_data(as_text=True)
-    sig = request.headers.get("Stripe-Signature", "")
     if not STRIPE_WEBHOOK_SECRET:
-        return "Missing webhook secret", 400
+        logger.error("Missing STRIPE_WEBHOOK_SECRET")
+        return "Missing STRIPE_WEBHOOK_SECRET", 500
+
+    payload = request.get_data(as_text=True)
+    sig_header = request.headers.get("Stripe-Signature", "")
 
     try:
         event = stripe.Webhook.construct_event(
-            payload, sig, STRIPE_WEBHOOK_SECRET
+            payload=payload,
+            sig_header=sig_header,
+            secret=STRIPE_WEBHOOK_SECRET
         )
-    except Exception as e:
-        log.exception("Webhook signature error: %s", e)
-        return "bad sig", 400
+    except ValueError as e:
+        logger.exception("Invalid Stripe payload")
+        return "Invalid payload", 400
+    except stripe.error.SignatureVerificationError as e:
+        logger.exception("Invalid Stripe signature")
+        return "Invalid signature", 400
 
-    if event["type"] == "checkout.session.completed":
-        obj = event["data"]["object"]
-        email = (obj.get("customer_details") or {}).get("email") or ""
-        niche = (obj.get("metadata") or {}).get("niche") or ""
-        city  = (obj.get("metadata") or {}).get("city") or ""
-        log.info("💳 Checkout completed: email=%s niche=%s city=%s", email, niche, city)
-        # Call brain (no-op if brain not present):
-        try:
-            record_purchase(email=email, niche=niche, city=city)
-        except Exception as e:
-            log.exception("record_purchase failed: %s", e)
+    etype = event.get("type")
+    data = event.get("data", {}).get("object", {})
+    logger.info(f"[Stripe] Event type: {etype}")
 
-    return "ok", 200
+    try:
+        if etype == "checkout.session.completed":
+            # Payment succeeded for Checkout Sessions
+            customer_email = data.get("customer_details", {}).get("email")
+            amount_total = data.get("amount_total")
+            currency = data.get("currency")
+            logger.info(f"[Stripe] Checkout completed: {customer_email}, {amount_total} {currency}")
+            # TODO: deliver product (generate ZIP, email download link, etc.)
 
+        elif etype == "payment_intent.succeeded":
+            amount = data.get("amount_received") or data.get("amount")
+            currency = data.get("currency")
+            logger.info(f"[Stripe] PaymentIntent succeeded: {amount} {currency}")
+            # TODO: fulfill order
+
+        elif etype == "invoice.payment_succeeded":
+            logger.info(f"[Stripe] Invoice payment succeeded: {data.get('id')}")
+            # TODO: provision/extend subscription
+
+        else:
+            logger.info(f"[Stripe] Unhandled event: {etype}")
+
+        return "OK", 200
+    except Exception:
+        logger.exception("[Stripe] Error while handling event")
+        return "Webhook handler error", 500
+
+# =========================
+# PAYPAL WEBHOOK
+# =========================
+def _paypal_get_access_token() -> str:
+    """Get OAuth2 access token from PayPal."""
+    auth = (PAYPAL_CLIENT_ID, PAYPAL_CLIENT_SECRET)
+    headers = {"Accept": "application/json", "Accept-Language": "en_US"}
+    data = {"grant_type": "client_credentials"}
+    resp = requests.post(f"{PAYPAL_API_BASE}/v1/oauth2/token", headers=headers, data=data, auth=auth, timeout=20)
+    resp.raise_for_status()
+    return resp.json()["access_token"]
+
+def _paypal_verify_signature(body: dict, headers: dict) -> bool:
+    """
+    Validate PayPal webhook using the /v1/notifications/verify-webhook-signature API.
+    Docs: https://developer.paypal.com/docs/api/webhooks/v1/#verify-webhook-signature_post
+    """
+    if not (PAYPAL_CLIENT_ID and PAYPAL_CLIENT_SECRET and PAYPAL_WEBHOOK_ID):
+        logger.error("Missing PayPal env vars (PAYPAL_CLIENT_ID/SECRET/WEBHOOK_ID)")
+        return False
+
+    try:
+        access_token = _paypal_get_access_token()
+    except Exception:
+        logger.exception("Failed to obtain PayPal access token")
+        return False
+
+    verify_payload = {
+        "transmission_id": headers.get("Paypal-Transmission-Id", ""),
+        "transmission_time": headers.get("Paypal-Transmission-Time", ""),
+        "cert_url": headers.get("Paypal-Cert-Url", ""),
+        "auth_algo": headers.get("Paypal-Auth-Algo", ""),
+        "transmission_sig": headers.get("Paypal-Transmission-Sig", ""),
+        "webhook_id": PAYPAL_WEBHOOK_ID,  # from PayPal dashboard
+        "webhook_event": body,
+    }
+
+    verify_headers = {
+        "Content-Type": "application/json",
+        "Authorization": f"Bearer {access_token}",
+    }
+
+    try:
+        resp = requests.post(
+            f"{PAYPAL_API_BASE}/v1/notifications/verify-webhook-signature",
+            headers=verify_headers,
+            data=json.dumps(verify_payload),
+            timeout=20
+        )
+        resp.raise_for_status()
+        status = resp.json().get("verification_status")
+        logger.info(f"[PayPal] verification_status={status}")
+        return status == "SUCCESS"
+    except Exception:
+        logger.exception("PayPal signature verification call failed")
+        return False
+
+@app.post("/paypal/webhook")
+def paypal_webhook():
+    body = request.get_json(silent=True) or {}
+    headers = request.headers
+
+    if not _paypal_verify_signature(body, headers):
+        return "Invalid PayPal signature", 400
+
+    event_type = body.get("event_type", "")
+    resource = body.get("resource", {})
+    logger.info(f"[PayPal] Event: {event_type}")
+
+    try:
+        if event_type == "PAYMENT.CAPTURE.COMPLETED":
+            amount = resource.get("amount", {}).get("value")
+            currency = resource.get("amount", {}).get("currency_code")
+            payer_email = (resource.get("payer", {}) or {}).get("email_address")
+            logger.info(f"[PayPal] Payment completed: {amount} {currency} by {payer_email}")
+            # TODO: deliver product
+
+        elif event_type == "CHECKOUT.ORDER.APPROVED":
+            order_id = resource.get("id")
+            logger.info(f"[PayPal] Order approved: {order_id}")
+            # (Optional) capture step if you use Orders API
+            # TODO: capture & fulfill
+
+        else:
+            logger.info(f"[PayPal] Unhandled event: {event_type}")
+
+        return "OK", 200
+    except Exception:
+        logger.exception("[PayPal] Error while handling event")
+        return "Webhook handler error", 500
+
+# =========================
+# OPTIONAL: Success/Cancel redirect pages
+# =========================
+@app.get("/success")
+def success():
+    return "<h3>Payment successful. Thank you!</h3>", 200
+
+@app.get("/cancel")
+def cancel():
+    return "<h3>Payment canceled.</h3>", 200
+
+# =========================
+# MAIN
+# =========================
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=int(os.getenv("PORT", "8000")), debug=True)
+    port = int(os.environ.get("PORT", 10000))
+    # bind to 0.0.0.0 for Render/Heroku/Docker
+    app.run(host="0.0.0.0", port=port)
