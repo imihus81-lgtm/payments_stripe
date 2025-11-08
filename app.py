@@ -1,73 +1,81 @@
-# payment/app.py
-
 import os
-from flask import Flask, request, jsonify
+from flask import Flask, request, jsonify, render_template
 import stripe
+
+app = Flask(__name__, template_folder=".", static_folder=".")
 
 # =====================
 # ENV VARS
 # =====================
-STRIPE_SECRET_KEY = os.getenv("STRIPE_SECRET_KEY", "")
+STRIPE_SECRET_KEY     = os.getenv("STRIPE_SECRET_KEY", "")
 STRIPE_WEBHOOK_SECRET = os.getenv("STRIPE_WEBHOOK_SECRET", "")
+PRICE_ID              = os.getenv("PRICE_ID", "")
+PUBLIC_BASE_URL       = os.getenv("PUBLIC_BASE_URL", "")
 
 stripe.api_key = STRIPE_SECRET_KEY
 
-app = Flask(__name__)
 
 # =====================
-# BASIC ROUTES
+# HEALTH CHECK
 # =====================
-
-@app.get("/")
-def root():
-    return jsonify({"status":"ok","service":"stripe-payment"}), 200
-
 @app.get("/healthz")
 def healthz():
-    return "ok", 200
+    return {"service":"stripe-payment","status":"ok"}, 200
+
+
+# =====================
+# HOME PAGE
+# =====================
+@app.get("/")
+def index():
+    return render_template("index.html")     # -> will show your form page
+
+
+# =====================
+# CHECKOUT START
+# =====================
+@app.post("/checkout")
+def checkout():
+    try:
+        session = stripe.checkout.Session.create(
+            mode="payment",
+            line_items=[{
+                "price": PRICE_ID,
+                "quantity": 1,
+            }],
+            success_url=f"{PUBLIC_BASE_URL}/success.html",
+            cancel_url=f"{PUBLIC_BASE_URL}/",
+        )
+        return jsonify({"url": session.url})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 
 # =====================
 # STRIPE WEBHOOK
 # =====================
-
 @app.post("/stripe/webhook")
 def stripe_webhook():
-    payload = request.get_data(as_text=True)
-    sig_header = request.headers.get("Stripe-Signature", "")
+    payload = request.data
+    sig = request.headers.get("stripe-signature")
 
     try:
         event = stripe.Webhook.construct_event(
-            payload=payload,
-            sig_header=sig_header,
-            secret=STRIPE_WEBHOOK_SECRET
+            payload, sig, STRIPE_WEBHOOK_SECRET
         )
     except Exception as e:
-        print("❌ Webhook signature error:", str(e))
-        return "invalid", 400
+        print("❌ Webhook error:", e)
+        return "bad", 400
 
-    event_type = event.get("type")
-    data = event.get("data", {}).get("object", {})
-
-    print(f"✅ Stripe Event: {event_type}")
-
-    if event_type == "checkout.session.completed":
-        customer_email = data.get("customer_details", {}).get("email")
-        print(f"💰 CHECKOUT COMPLETE: {customer_email}")
-
-        # TODO: call your web generator & deliver zip
-
-    elif event_type == "payment_intent.succeeded":
-        print("💚 Payment succeeded (PI)")
-        # TODO: deliver
+    # log event
+    print("✅ Stripe Event:", event.get("type"))
 
     return "ok", 200
 
 
 # =====================
-# MAIN (local only)
+# MAIN LOCAL RUN
 # =====================
-
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 10000))
     app.run(host="0.0.0.0", port=port)
