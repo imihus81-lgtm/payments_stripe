@@ -3,34 +3,67 @@ from flask import Flask, request, jsonify, render_template
 from jinja2 import TemplateNotFound
 import stripe
 
+# Flask finds HTML in ./templates
 app = Flask(__name__, template_folder="templates")
 
-# ---- ENV ----
-STRIPE_SECRET_KEY     = os.getenv("STRIPE_SECRET_KEY", "")
-STRIPE_WEBHOOK_SECRET = os.getenv("STRIPE_WEBHOOK_SECRET", "")
-PRICE_ID              = os.getenv("PRICE_ID", "")
-PUBLIC_BASE_URL       = os.getenv("PUBLIC_BASE_URL", "")
+# ======================
+# ENV (trim & validate)
+# ======================
+STRIPE_SECRET_KEY     = os.getenv("STRIPE_SECRET_KEY", "").strip()
+STRIPE_WEBHOOK_SECRET = os.getenv("STRIPE_WEBHOOK_SECRET", "").strip()
+PRICE_ID              = os.getenv("PRICE_ID", "").strip()
+PUBLIC_BASE_URL       = os.getenv("PUBLIC_BASE_URL", "").strip()
+
+if not STRIPE_SECRET_KEY:
+    raise RuntimeError("STRIPE_SECRET_KEY is missing. Use your sk_test_... (or sk_live_...) key.")
+if STRIPE_SECRET_KEY.startswith("pk_"):
+    raise RuntimeError("You set a publishable key (pk_...). Set STRIPE_SECRET_KEY to your SECRET key (sk_...).")
+if not PRICE_ID:
+    raise RuntimeError("PRICE_ID is missing. Set it to your Stripe price_... id.")
+if not PUBLIC_BASE_URL:
+    raise RuntimeError("PUBLIC_BASE_URL is missing. Example: https://pay.xaiagent.ai (or http://127.0.0.1:10000 locally).")
 
 stripe.api_key = STRIPE_SECRET_KEY
 
-# ---- Health ----
+# ======================
+# Health
+# ======================
 @app.get("/healthz")
 def healthz():
     return {"service": "stripe-payment", "status": "ok"}, 200
 
-# ---- Home ----
+# ======================
+# Pages
+# ======================
 @app.get("/")
 def index():
     try:
         return render_template("index.html")
     except TemplateNotFound:
-        # Safe fallback so you’re never blocked by templates
-        return """
-        <h1>Stripe Payment App</h1>
-        <p>Template <code>index.html</code> not found in <code>templates/</code>.</p>
-        """, 200
+        return (
+            "<h1>Stripe Payment App</h1>"
+            "<p>Missing <code>templates/index.html</code>.</p>",
+            200,
+        )
 
-# ---- Checkout ----
+# Optional: serve these directly if you link to /success.html or /verify.html
+@app.get("/success.html")
+def success_page():
+    try:
+        return render_template("success.html")
+    except TemplateNotFound:
+        return "<h1>Success</h1><p>Add templates/success.html</p>", 200
+
+@app.get("/verify.html")
+def verify_page():
+    try:
+        return render_template("verify.html")
+    except TemplateNotFound:
+        return "<h1>Verify</h1><p>Add templates/verify.html</p>", 200
+
+# ======================
+# Checkout
+# ======================
 @app.post("/checkout")
 def checkout():
     try:
@@ -42,9 +75,12 @@ def checkout():
         )
         return jsonify({"url": session.url})
     except Exception as e:
+        # Bubble useful error back to logs/response
         return jsonify({"error": str(e)}), 500
 
-# ---- Webhook ----
+# ======================
+# Webhook
+# ======================
 @app.post("/stripe/webhook")
 def stripe_webhook():
     payload = request.data
@@ -57,8 +93,13 @@ def stripe_webhook():
         return "bad", 400
 
     print("✅ Stripe Event:", event.get("type"))
+    # You can branch here on event["type"] if needed
+
     return "ok", 200
 
+# ======================
+# Main (local)
+# ======================
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 10000))
     app.run(host="0.0.0.0", port=port)
