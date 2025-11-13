@@ -1,40 +1,345 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-    <meta charset="UTF-8">
-    <title>Verifying Payment – XAI Agent</title>
-    <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta charset="UTF-8" />
+  <title>Verifying your payment | XAI Web Automation Pack</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <style>
+    :root {
+      --bg: #050810;
+      --bg-card: #0c1220;
+      --accent: #27c27a;
+      --accent-soft: rgba(39, 194, 122, 0.2);
+      --accent-strong: #39e08f;
+      --text-main: #f5f7ff;
+      --text-muted: #a6b0d8;
+      --border-subtle: rgba(255, 255, 255, 0.06);
+      --danger: #ffb347;
+    }
 
-    <style>
-        body {
-            text-align: center;
-            padding: 40px;
-            background: #fafafa;
-            font-family: Arial;
-        }
-        .box {
-            background: white;
-            padding: 30px;
-            border-radius: 12px;
-            max-width: 420px;
-            margin: auto;
-            box-shadow: 0 4px 18px rgba(0,0,0,0.12);
-        }
-        h1 {
-            color: #444;
-        }
-        p {
-            color: #555;
-        }
-    </style>
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    body {
+      min-height: 100vh;
+      font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI",
+        sans-serif;
+      background:
+        radial-gradient(circle at top left, #1a2b5c 0, transparent 55%),
+        radial-gradient(circle at bottom right, #0b684e 0, transparent 55%),
+        var(--bg);
+      color: var(--text-main);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 24px;
+    }
+
+    .shell {
+      width: 100%;
+      max-width: 720px;
+      background: linear-gradient(135deg, #0a1020, #050810);
+      border-radius: 24px;
+      border: 1px solid rgba(255, 255, 255, 0.06);
+      box-shadow:
+        0 24px 60px rgba(0, 0, 0, 0.85),
+        0 0 0 1px rgba(255, 255, 255, 0.02);
+      padding: 28px 24px 22px;
+      position: relative;
+      overflow: hidden;
+    }
+
+    .shell::before {
+      content: "";
+      position: absolute;
+      inset: -40%;
+      background:
+        radial-gradient(circle at 10% 0, rgba(39, 194, 122, 0.1), transparent 60%),
+        radial-gradient(circle at 90% 100%, rgba(80, 130, 255, 0.16), transparent 60%);
+      opacity: 0.9;
+      pointer-events: none;
+    }
+
+    .shell-inner {
+      position: relative;
+      z-index: 1;
+    }
+
+    .badge-row {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      margin-bottom: 16px;
+    }
+
+    .badge-icon {
+      width: 32px;
+      height: 32px;
+      border-radius: 12px;
+      background: radial-gradient(circle at 30% 0, #39e08f, #0f5a33);
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.7);
+      font-size: 18px;
+    }
+
+    .badge-text {
+      font-size: 13px;
+      color: var(--text-muted);
+      letter-spacing: 0.05em;
+      text-transform: uppercase;
+    }
+
+    h1 {
+      font-size: 26px;
+      margin-bottom: 4px;
+    }
+
+    .subtitle {
+      font-size: 14px;
+      color: var(--text-muted);
+      margin-bottom: 20px;
+    }
+
+    .status-pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 13px;
+      padding: 7px 12px;
+      border-radius: 999px;
+      background: var(--accent-soft);
+      color: var(--accent-strong);
+      border: 1px solid rgba(39, 194, 122, 0.4);
+      margin-bottom: 18px;
+    }
+
+    .status-dot {
+      width: 10px;
+      height: 10px;
+      border-radius: 999px;
+      background: var(--accent);
+      box-shadow: 0 0 0 4px rgba(39, 194, 122, 0.25);
+    }
+
+    .panel {
+      border-radius: 18px;
+      border: 1px solid var(--border-subtle);
+      background: radial-gradient(circle at top, rgba(255, 255, 255, 0.03), transparent 65%),
+                  radial-gradient(circle at bottom, rgba(0, 0, 0, 0.34), transparent 70%);
+      padding: 18px 18px 16px;
+      margin-bottom: 18px;
+    }
+
+    .panel-title {
+      font-size: 14px;
+      font-weight: 600;
+      margin-bottom: 10px;
+    }
+
+    .steps {
+      list-style: none;
+      display: grid;
+      gap: 10px;
+      font-size: 13px;
+    }
+
+    .step {
+      display: flex;
+      gap: 10px;
+      align-items: flex-start;
+    }
+
+    .step-num {
+      width: 22px;
+      height: 22px;
+      border-radius: 999px;
+      background: rgba(39, 194, 122, 0.14);
+      color: var(--accent-strong);
+      border: 1px solid rgba(39, 194, 122, 0.4);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 12px;
+      flex-shrink: 0;
+      margin-top: 1px;
+    }
+
+    .step-body {
+      color: var(--text-muted);
+      line-height: 1.5;
+    }
+
+    .step-body b {
+      color: var(--text-main);
+    }
+
+    .note {
+      margin-top: 8px;
+      padding: 10px 12px;
+      border-radius: 12px;
+      background: rgba(255, 255, 255, 0.03);
+      border: 1px dashed rgba(255, 255, 255, 0.1);
+      font-size: 12px;
+      color: var(--text-muted);
+    }
+
+    .danger {
+      color: var(--danger);
+      font-weight: 500;
+    }
+
+    .footer {
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: space-between;
+      gap: 12px;
+      margin-top: 10px;
+      align-items: center;
+    }
+
+    .support-text {
+      font-size: 12px;
+      color: var(--text-muted);
+    }
+
+    .support-text a {
+      color: var(--accent-strong);
+      text-decoration: none;
+    }
+
+    .support-text a:hover {
+      text-decoration: underline;
+    }
+
+    .btn-row {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      border-radius: 999px;
+      padding: 8px 16px;
+      font-size: 13px;
+      font-weight: 500;
+      border: 1px solid transparent;
+      text-decoration: none;
+      cursor: pointer;
+      transition: transform 0.08s ease, box-shadow 0.08s ease, background 0.12s ease;
+    }
+
+    .btn-primary {
+      background: linear-gradient(135deg, var(--accent), var(--accent-strong));
+      color: #020309;
+      box-shadow:
+        0 0 0 1px rgba(0, 0, 0, 0.6),
+        0 14px 30px rgba(0, 0, 0, 0.9);
+    }
+
+    .btn-primary:hover {
+      transform: translateY(-1px);
+      box-shadow:
+        0 0 0 1px rgba(0, 0, 0, 0.6),
+        0 18px 34px rgba(0, 0, 0, 1);
+    }
+
+    .btn-ghost {
+      background: transparent;
+      color: var(--text-muted);
+      border-color: rgba(255, 255, 255, 0.12);
+    }
+
+    .btn-ghost:hover {
+      background: rgba(255, 255, 255, 0.02);
+    }
+
+    @media (max-width: 540px) {
+      .shell {
+        padding: 22px 18px 18px;
+      }
+      h1 {
+        font-size: 22px;
+      }
+      .subtitle {
+        font-size: 13px;
+      }
+      .footer {
+        flex-direction: column;
+        align-items: flex-start;
+      }
+    }
+  </style>
 </head>
 <body>
+  <div class="shell">
+    <div class="shell-inner">
+      <div class="badge-row">
+        <div class="badge-icon">S</div>
+        <div class="badge-text">Secure Stripe verification</div>
+      </div>
 
-<div class="box">
-    <h1>⏳ Verifying Your Payment...</h1>
-    <p>Please wait a moment.</p>
-    <p>If anything goes wrong, the system will notify you.</p>
-</div>
+      <h1>Verifying your payment…</h1>
+      <p class="subtitle">
+        Some banks add an extra security step (3-D Secure / OTP).  
+        Once your bank finishes verification, we’ll confirm your order automatically.
+      </p>
 
+      <div class="status-pill">
+        <span class="status-dot"></span>
+        Awaiting confirmation from your bank
+      </div>
+
+      <div class="panel">
+        <div class="panel-title">What you should do now</div>
+        <ul class="steps">
+          <li class="step">
+            <div class="step-num">1</div>
+            <div class="step-body">
+              Complete any <b>bank security popup</b> (OTP / password / app confirmation)  
+              that appears in your browser or on your phone.
+            </div>
+          </li>
+          <li class="step">
+            <div class="step-num">2</div>
+            <div class="step-body">
+              When your bank confirms, Stripe will finalize the payment and  
+              you’ll be redirected to the <b>Payment Successful</b> page.
+            </div>
+          </li>
+          <li class="step">
+            <div class="step-num">3</div>
+            <div class="step-body">
+              After success, our <b>automation engine</b> starts generating your  
+              website & asset pack and you’ll receive a confirmation email.
+            </div>
+          </li>
+        </ul>
+
+        <div class="note">
+          <span class="danger">If you don’t see any bank popup:</span>  
+          Please check other tabs, your banking app, or try the payment again from the main page.
+        </div>
+      </div>
+
+      <div class="footer">
+        <div class="support-text">
+          Need help? Contact  
+          <a href="mailto:support@xaiagent.ai">support@xaiagent.ai</a>
+        </div>
+        <div class="btn-row">
+          <a href="/" class="btn btn-primary">Back to main page</a>
+          <a href="mailto:support@xaiagent.ai" class="btn btn-ghost">Contact support</a>
+        </div>
+      </div>
+    </div>
+  </div>
 </body>
 </html>
