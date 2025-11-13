@@ -1,105 +1,117 @@
 import os
-from flask import Flask, request, jsonify, render_template
+from flask import Flask, request, jsonify, render_template, redirect
 from jinja2 import TemplateNotFound
 import stripe
 
-# Flask finds HTML in ./templates
+# -----------------------------
+#  FLASK SETUP
+# -----------------------------
 app = Flask(__name__, template_folder="templates")
 
-# ======================
-# ENV (trim & validate)
-# ======================
-STRIPE_SECRET_KEY     = os.getenv("STRIPE_SECRET_KEY", "").strip()
-STRIPE_WEBHOOK_SECRET = os.getenv("STRIPE_WEBHOOK_SECRET", "").strip()
-PRICE_ID              = os.getenv("PRICE_ID", "").strip()
-PUBLIC_BASE_URL       = os.getenv("PUBLIC_BASE_URL", "").strip()
+# -----------------------------
+#  ENVIRONMENT VARIABLES
+# -----------------------------
+STRIPE_SECRET_KEY     = os.getenv("STRIPE_SECRET_KEY", "")
+STRIPE_WEBHOOK_SECRET = os.getenv("STRIPE_WEBHOOK_SECRET", "")
+PRICE_ID              = os.getenv("PRICE_ID", "")
+PUBLIC_BASE_URL       = os.getenv("PUBLIC_BASE_URL", "")
 
-if not STRIPE_SECRET_KEY:
-    raise RuntimeError("STRIPE_SECRET_KEY is missing. Use your sk_test_... (or sk_live_...) key.")
-if STRIPE_SECRET_KEY.startswith("pk_"):
-    raise RuntimeError("You set a publishable key (pk_...). Set STRIPE_SECRET_KEY to your SECRET key (sk_...).")
-if not PRICE_ID:
-    raise RuntimeError("PRICE_ID is missing. Set it to your Stripe price_... id.")
+# Validate ENV values
+if not STRIPE_SECRET_KEY or not STRIPE_SECRET_KEY.startswith("sk_"):
+    raise RuntimeError("❌ STRIPE_SECRET_KEY missing or invalid. Must be sk_...")
+
+if not PRICE_ID or not PRICE_ID.startswith("price_"):
+    raise RuntimeError("❌ PRICE_ID missing or invalid. Must be price_...")
+
 if not PUBLIC_BASE_URL:
-    raise RuntimeError("PUBLIC_BASE_URL is missing. Example: https://pay.xaiagent.ai (or http://127.0.0.1:10000 locally).")
+    raise RuntimeError("❌ PUBLIC_BASE_URL missing. Example: https://pay.xaiagent.ai")
 
 stripe.api_key = STRIPE_SECRET_KEY
 
-# ======================
-# Health
-# ======================
+
+# -----------------------------
+#  HEALTH CHECK (Render will use this)
+# -----------------------------
 @app.get("/healthz")
 def healthz():
     return {"service": "stripe-payment", "status": "ok"}, 200
 
-# ======================
-# Pages
-# ======================
+
+# -----------------------------
+#  HOME PAGE
+# -----------------------------
 @app.get("/")
 def index():
     try:
         return render_template("index.html")
     except TemplateNotFound:
-        return (
-            "<h1>Stripe Payment App</h1>"
-            "<p>Missing <code>templates/index.html</code>.</p>",
-            200,
-        )
+        return """
+        <h1>XAI Agent – Stripe Payment</h1>
+        <p><b>index.html</b> missing in <b>/templates</b> folder.</p>
+        """, 200
 
-# Optional: serve these directly if you link to /success.html or /verify.html
-@app.get("/success.html")
-def success_page():
-    try:
-        return render_template("success.html")
-    except TemplateNotFound:
-        return "<h1>Success</h1><p>Add templates/success.html</p>", 200
 
-@app.get("/verify.html")
-def verify_page():
-    try:
-        return render_template("verify.html")
-    except TemplateNotFound:
-        return "<h1>Verify</h1><p>Add templates/verify.html</p>", 200
-
-# ======================
-# Checkout
-# ======================
+# -----------------------------
+#  CHECKOUT – Create Stripe Session
+# -----------------------------
 @app.post("/checkout")
 def checkout():
     try:
         session = stripe.checkout.Session.create(
             mode="payment",
-            line_items=[{"price": PRICE_ID, "quantity": 1}],
+            line_items=[{
+                "price": PRICE_ID,
+                "quantity": 1
+            }],
             success_url=f"{PUBLIC_BASE_URL}/success.html",
             cancel_url=f"{PUBLIC_BASE_URL}/",
         )
-        return jsonify({"url": session.url})
+
+        # Redirect user to Stripe Checkout
+        return redirect(session.url, code=303)
+
     except Exception as e:
-        # Bubble useful error back to logs/response
+        print("❌ Error creating checkout:", e)
         return jsonify({"error": str(e)}), 500
 
-# ======================
-# Webhook
-# ======================
+
+# -----------------------------
+#  STRIPE WEBHOOK
+# -----------------------------
 @app.post("/stripe/webhook")
 def stripe_webhook():
     payload = request.data
     sig = request.headers.get("stripe-signature", "")
 
     try:
-        event = stripe.Webhook.construct_event(payload, sig, STRIPE_WEBHOOK_SECRET)
+        event = stripe.Webhook.construct_event(
+            payload, sig, STRIPE_WEBHOOK_SECRET
+        )
     except Exception as e:
-        print("❌ Webhook error:", e)
+        print("❌ Webhook signature error:", e)
         return "bad", 400
 
-    print("✅ Stripe Event:", event.get("type"))
-    # You can branch here on event["type"] if needed
+    event_type = event.get("type")
+    data = event.get("data", {}).get("object", {})
+    print("✅ Stripe Event:", event_type)
+
+    if event_type == "checkout.session.completed":
+        print("💰 Payment Success!")
+        print("Customer email:", data.get("customer_details", {}).get("email"))
+
+        # 👉 TODO: after payment — trigger your:
+        # - web automation engine
+        # - domain setup
+        # - lead delivery
+        # - Gmail system
+        # - CEO brain log entry
 
     return "ok", 200
 
-# ======================
-# Main (local)
-# ======================
+
+# -----------------------------
+#  MAIN (LOCAL RUN)
+# -----------------------------
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 10000))
     app.run(host="0.0.0.0", port=port)
