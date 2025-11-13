@@ -52,6 +52,23 @@ def index():
 
 
 # -----------------------------
+#  SUCCESS PAGE
+# -----------------------------
+@app.get("/success")
+def success_page():
+    """
+    Stripe will redirect here after successful payment.
+    """
+    try:
+        return render_template("success.html")
+    except TemplateNotFound:
+        return """
+        <h1>Payment Successful ✅</h1>
+        <p><b>success.html</b> missing in <b>/templates</b> folder.</p>
+        """, 200
+
+
+# -----------------------------
 #  CHECKOUT – Create Stripe Session
 # -----------------------------
 @app.post("/checkout")
@@ -63,7 +80,8 @@ def checkout():
                 "price": PRICE_ID,
                 "quantity": 1
             }],
-            success_url=f"{PUBLIC_BASE_URL}/success.html",
+            # ✅ IMPORTANT: route is /success, not success.html
+            success_url=f"{PUBLIC_BASE_URL}/success",
             cancel_url=f"{PUBLIC_BASE_URL}/",
         )
 
@@ -99,7 +117,7 @@ def stripe_webhook():
         print("💰 Payment Success!")
         print("Customer email:", data.get("customer_details", {}).get("email"))
 
-        # 👉 TODO: after payment — trigger your:
+        # 👉 TODO LATER: after payment — trigger your:
         # - web automation engine
         # - domain setup
         # - lead delivery
