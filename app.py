@@ -14,9 +14,12 @@ app = Flask(__name__, template_folder="templates")
 STRIPE_SECRET_KEY     = os.getenv("STRIPE_SECRET_KEY", "")
 STRIPE_WEBHOOK_SECRET = os.getenv("STRIPE_WEBHOOK_SECRET", "")
 PRICE_ID              = os.getenv("PRICE_ID", "")
-PUBLIC_BASE_URL       = os.getenv("PUBLIC_BASE_URL", "")
+PUBLIC_BASE_URL       = os.getenv("PUBLIC_BASE_URL", "")  # e.g. https://pay.xaiagent.ai
 
-# Validate ENV values
+# Optional: PayPal (for webhooks later if needed)
+PAYPAL_WEBHOOK_ID = os.getenv("PAYPAL_WEBHOOK_ID", "")
+
+# Validate ENV values for Stripe
 if not STRIPE_SECRET_KEY or not STRIPE_SECRET_KEY.startswith("sk_"):
     raise RuntimeError("❌ STRIPE_SECRET_KEY missing or invalid. Must be sk_...")
 
@@ -34,7 +37,7 @@ stripe.api_key = STRIPE_SECRET_KEY
 # -----------------------------
 @app.get("/healthz")
 def healthz():
-    return {"service": "stripe-payment", "status": "ok"}, 200
+    return {"service": "stripe-paypal-payment", "status": "ok"}, 200
 
 
 # -----------------------------
@@ -43,10 +46,11 @@ def healthz():
 @app.get("/")
 def index():
     try:
+        # index.html has Stripe + PayPal buttons
         return render_template("index.html")
     except TemplateNotFound:
         return """
-        <h1>XAI Agent – Stripe Payment</h1>
+        <h1>XAI Agent – Payments</h1>
         <p><b>index.html</b> missing in <b>/templates</b> folder.</p>
         """, 200
 
@@ -57,7 +61,7 @@ def index():
 @app.get("/success")
 def success_page():
     """
-    Stripe will redirect here after successful payment.
+    After successful payment (Stripe or PayPal) we redirect here.
     """
     try:
         return render_template("success.html")
@@ -69,10 +73,28 @@ def success_page():
 
 
 # -----------------------------
-#  CHECKOUT – Create Stripe Session
+#  CANCEL PAGE (optional)
 # -----------------------------
-@app.post("/checkout")
+@app.get("/cancel")
+def cancel_page():
+    try:
+        return render_template("cancel.html")
+    except TemplateNotFound:
+        return """
+        <h1>Payment Cancelled ❌</h1>
+        <p><b>cancel.html</b> missing in <b>/templates</b> folder.</p>
+        """, 200
+
+
+# -----------------------------
+#  STRIPE CHECKOUT – Create Session
+# -----------------------------
+@app.route("/checkout", methods=["GET", "POST"])
 def checkout():
+    """
+    Creates a Stripe Checkout Session.
+    The index.html "Pay with Card (Stripe)" button can just link to /checkout.
+    """
     try:
         session = stripe.checkout.Session.create(
             mode="payment",
@@ -80,9 +102,8 @@ def checkout():
                 "price": PRICE_ID,
                 "quantity": 1
             }],
-            # ✅ IMPORTANT: route is /success, not success.html
             success_url=f"{PUBLIC_BASE_URL}/success",
-            cancel_url=f"{PUBLIC_BASE_URL}/",
+            cancel_url=f"{PUBLIC_BASE_URL}/cancel",
         )
 
         # Redirect user to Stripe Checkout
@@ -106,7 +127,7 @@ def stripe_webhook():
             payload, sig, STRIPE_WEBHOOK_SECRET
         )
     except Exception as e:
-        print("❌ Webhook signature error:", e)
+        print("❌ Stripe webhook signature error:", e)
         return "bad", 400
 
     event_type = event.get("type")
@@ -114,15 +135,49 @@ def stripe_webhook():
     print("✅ Stripe Event:", event_type)
 
     if event_type == "checkout.session.completed":
-        print("💰 Payment Success!")
-        print("Customer email:", data.get("customer_details", {}).get("email"))
+        print("💰 Stripe payment success")
+        customer_email = data.get("customer_details", {}).get("email")
+        amount_total = data.get("amount_total")
+        print("Customer email:", customer_email)
+        print("Amount (cents):", amount_total)
 
-        # 👉 TODO LATER: after payment — trigger your:
-        # - web automation engine
-        # - domain setup
-        # - lead delivery
-        # - Gmail system
-        # - CEO brain log entry
+        # 👉 TODO: Deliver your product/service here
+        # e.g. generate website/report, send email, log to DB, etc.
+
+    return "ok", 200
+
+
+# -----------------------------
+#  PAYPAL WEBHOOK (Optional but Recommended)
+# -----------------------------
+@app.post("/paypal/webhook")
+def paypal_webhook():
+    """
+    PayPal will POST events here (after you configure the webhook URL in PayPal dashboard).
+    For now we just log the event.
+    Later you can verify signatures and map it to orders/emails.
+    """
+    try:
+        event = request.json or {}
+    except Exception as e:
+        print("❌ PayPal webhook JSON error:", e)
+        return "bad", 400
+
+    event_type = event.get("event_type")
+    resource = event.get("resource", {})
+
+    print("✅ PayPal Event:", event_type)
+
+    # Common event when payment is fully captured
+    if event_type == "PAYMENT.CAPTURE.COMPLETED":
+        amount = resource.get("amount", {}).get("value")
+        currency = resource.get("amount", {}).get("currency_code")
+        payer = resource.get("payer", {})
+        payer_email = payer.get("email_address")
+        print(f"💰 PayPal payment success: {amount} {currency} from {payer_email}")
+
+        # 👉 TODO: Deliver your product/service here
+        # same logic as Stripe: create website/report, send email, etc.
 
     return "ok", 200
 
